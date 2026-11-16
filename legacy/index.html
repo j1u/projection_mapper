@@ -1,0 +1,1034 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Projection Mapper</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden;
+    font: 13px/1.4 system-ui, -apple-system, Segoe UI, sans-serif; color: #e6e6e6; user-select: none; }
+  body:not(.edit) { cursor: none; }
+  #stage { position: fixed; inset: 0; }
+  body.blackout #stage { visibility: hidden; }
+  .surface { position: absolute; left: 0; top: 0; transform-origin: 0 0; overflow: hidden; background: #000; will-change: transform; }
+  .surface > * { width: 100%; height: 100%; display: block; border: 0; }
+  .surface iframe { pointer-events: none; background: #000; }
+  .surface .txt { display: flex; align-items: center; justify-content: center; text-align: center;
+    font: 700 150px/1.1 system-ui, sans-serif; padding: 40px; box-sizing: border-box; word-break: break-word; }
+  .glsurf { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+  /* edit overlay */
+  #overlay { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; display: none; }
+  body.edit #overlay { display: block; }
+  #overlay .body { fill: rgba(0,0,0,0); stroke: var(--c); stroke-width: 1.5; stroke-dasharray: 6 5;
+    pointer-events: all; cursor: move; }
+  #overlay .body.sel { stroke-width: 2.5; stroke-dasharray: none; }
+  #overlay .diag { stroke: var(--c); stroke-width: 1; opacity: .5; fill: none; }
+  #overlay .mline { stroke: var(--c); stroke-width: 1; opacity: .7; fill: none; }
+  #overlay .corner { fill: rgba(0,0,0,.6); stroke: var(--c); stroke-width: 3; pointer-events: all; cursor: crosshair; }
+  #overlay .corner.on { fill: var(--c); }
+  #overlay .mpt { fill: rgba(0,0,0,.7); stroke: #fff; stroke-width: 2; pointer-events: all; cursor: crosshair; }
+  #overlay .mpt.on { fill: var(--c); }
+  #overlay .move { fill: var(--c); stroke: #000; stroke-width: 2; pointer-events: all; cursor: move; }
+  #overlay text { fill: #fff; font: 700 13px system-ui; paint-order: stroke; stroke: #000; stroke-width: 3; }
+
+  /* panel */
+  #panel { position: fixed; top: 12px; left: 12px; width: 300px; max-height: calc(100% - 24px);
+    display: none; flex-direction: column; background: rgba(22,22,28,.94); border: 1px solid #333;
+    border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,.6); backdrop-filter: blur(6px); }
+  body.edit:not(.nopanel) #panel { display: flex; }
+  #panel.right { left: auto; right: 12px; }
+  #panel header { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid #333; font-weight: 700; }
+  #panel header span { flex: 1; }
+  #panel .scroll { overflow-y: auto; padding: 10px 12px 12px; }
+  #panel h4 { margin: 14px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #888; }
+  #panel h4:first-child { margin-top: 0; }
+  button { background: #2c2c36; color: #eee; border: 1px solid #44444f; border-radius: 6px; padding: 5px 9px;
+    font: inherit; cursor: pointer; }
+  button:hover { background: #3a3a46; }
+  button.primary { background: #3b5bdb; border-color: #4c6ef5; }
+  button.primary:hover { background: #4c6ef5; }
+  button.danger:hover { background: #a61e4d; border-color: #c2255c; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 6px; }
+  .row > button { flex: 1; }
+  label.f { display: grid; grid-template-columns: 88px 1fr; align-items: center; gap: 8px; margin-bottom: 6px; }
+  label.f > span { color: #aaa; }
+  input[type=text], select { background: #15151a; color: #eee; border: 1px solid #44444f; border-radius: 6px;
+    padding: 4px 6px; font: inherit; min-width: 0; }
+  input[type=color] { width: 100%; height: 26px; border: 1px solid #44444f; border-radius: 6px; background: #15151a; padding: 1px; }
+  input[type=range] { width: 100%; }
+  .checks { display: flex; gap: 12px; flex-wrap: wrap; margin: 4px 0 8px; }
+  .checks label { display: flex; gap: 4px; align-items: center; }
+  #list { list-style: none; margin: 0; padding: 0; border: 1px solid #333; border-radius: 6px; max-height: 160px; overflow-y: auto; }
+  #list li { display: flex; align-items: center; gap: 8px; padding: 5px 8px; cursor: pointer; border-bottom: 1px solid #2a2a30; }
+  #list li:last-child { border-bottom: 0; }
+  #list li.sel { background: #2b3a6b; }
+  #list li .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  #list li .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #list li .tag { font-size: 10px; color: #9ab; border: 1px solid #456; border-radius: 4px; padding: 0 4px; }
+  #list li .eye { opacity: .7; }
+  #list li.hid .nm { opacity: .4; text-decoration: line-through; }
+  #list:empty::after { content: "No surfaces — click + Surface"; display: block; padding: 8px; color: #777; }
+  #props[disabled] { opacity: .35; pointer-events: none; }
+  fieldset { border: 0; padding: 0; margin: 0; }
+  .media-name { color: #8aa; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: -2px 0 6px; }
+  .url-row { display: flex; gap: 6px; margin-bottom: 6px; }
+  .url-row input { flex: 1; }
+  .note { background: #3a2f12; border: 1px solid #6b5420; color: #f0d78a; border-radius: 6px; padding: 6px 8px; font-size: 12px; margin: 4px 0 8px; }
+  .note:empty { display: none; }
+  .meshbox { border: 1px solid #333; border-radius: 6px; padding: 8px; margin: 6px 0 8px; }
+  kbd { background: #2c2c36; border: 1px solid #44444f; border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; font: 11px ui-monospace, monospace; }
+  .keys { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; color: #aaa; font-size: 12px; }
+  .hint { color: #888; font-size: 12px; }
+  #toast { position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); background: rgba(20,20,26,.92);
+    border: 1px solid #444; padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .4s; pointer-events: none; max-width: 80vw; text-align: center; }
+  #toast.show { opacity: 1; }
+  .hide { display: none !important; }
+</style>
+</head>
+<body class="edit">
+<div id="stage"></div>
+<svg id="overlay"></svg>
+
+<div id="panel">
+  <header>
+    <span>◩ Projection Mapper</span>
+    <button id="side" title="Move panel to other side">⇆</button>
+    <button id="hidepanel" title="Hide panel (H)">✕</button>
+  </header>
+  <div class="scroll">
+    <h4>Surfaces</h4>
+    <div class="row">
+      <button class="primary" id="add">+ Surface</button>
+      <button id="dup">Duplicate</button>
+      <button class="danger" id="del">Delete</button>
+    </div>
+    <ul id="list"></ul>
+    <div class="row" style="margin-top:6px">
+      <button id="up" title="Bring forward">▲ Forward</button>
+      <button id="down" title="Send backward">▼ Back</button>
+    </div>
+
+    <fieldset id="props">
+      <h4>Selected surface</h4>
+      <label class="f"><span>Name</span><input type="text" id="p-name"></label>
+      <label class="f"><span>Content</span>
+        <select id="p-content">
+          <optgroup label="Patterns">
+            <option value="grid">Calibration grid</option>
+            <option value="plasma">Plasma</option>
+            <option value="stripes">Moving stripes</option>
+            <option value="rings">Pulse rings</option>
+          </optgroup>
+          <optgroup label="Basic">
+            <option value="color">Solid color</option>
+            <option value="text">Text</option>
+          </optgroup>
+          <optgroup label="Local files">
+            <option value="image">Image file…</option>
+            <option value="video">Video file…</option>
+          </optgroup>
+          <optgroup label="Online">
+            <option value="youtube">YouTube</option>
+            <option value="videourl">Video URL (.mp4 / .webm)</option>
+            <option value="imageurl">Image URL</option>
+            <option value="web">Web page / embed (Vimeo, etc.)</option>
+          </optgroup>
+          <optgroup label="Live">
+            <option value="webcam">Camera / capture card</option>
+            <option value="screen">Screen / window / tab capture</option>
+          </optgroup>
+        </select>
+      </label>
+
+      <div id="g-file">
+        <div class="row"><button id="p-pick" style="flex:1">Choose file…</button></div>
+        <div class="media-name" id="p-medianame"></div>
+      </div>
+      <div id="g-url">
+        <div class="url-row"><input type="text" id="p-url" placeholder="Paste link"><button id="p-urlgo">Load</button></div>
+      </div>
+      <div id="g-device">
+        <label class="f"><span>Device</span><select id="p-device"></select></label>
+        <div class="row"><button id="p-camstart">Start camera</button></div>
+      </div>
+      <div id="g-capture">
+        <div class="row"><button id="p-capture" style="flex:1">Start capture…</button></div>
+        <div class="media-name" id="p-capname"></div>
+      </div>
+      <div class="note" id="p-note"></div>
+
+      <label class="f" id="g-text"><span>Text</span><input type="text" id="p-text"></label>
+      <label class="f" id="g-color"><span>Color</span><input type="color" id="p-color"></label>
+      <label class="f" id="g-fit"><span>Fit</span>
+        <select id="p-fit"><option value="fill">Stretch to surface</option><option value="cover">Cover (crop)</option><option value="contain">Contain (letterbox)</option></select>
+      </label>
+      <label class="f"><span>Opacity</span><input type="range" id="p-opacity" min="0" max="1" step="0.01"></label>
+      <label class="f"><span>Brightness</span><input type="range" id="p-brightness" min="0" max="2" step="0.01"></label>
+      <div class="checks">
+        <label><input type="checkbox" id="p-visible"> Visible</label>
+        <label><input type="checkbox" id="p-flipH"> Flip H</label>
+        <label><input type="checkbox" id="p-flipV"> Flip V</label>
+        <label id="g-sound"><input type="checkbox" id="p-sound"> Sound</label>
+      </div>
+
+      <div class="meshbox">
+        <div class="checks" style="margin:0"><label><input type="checkbox" id="p-mesh"> <b>Mesh warp</b> (curved surfaces)</label></div>
+        <div id="g-mesh" style="margin-top:8px">
+          <label class="f"><span>Grid points</span>
+            <select id="p-meshsize">
+              <option>3x3</option><option>4x3</option><option>3x4</option><option>4x4</option>
+              <option>5x5</option><option>6x4</option><option>4x6</option><option>6x6</option><option>8x8</option>
+            </select>
+          </label>
+          <div class="row"><button id="meshreset">Flatten mesh</button></div>
+          <div class="hint">Corners set the overall shape. Drag the small white dots to bend the surface.</div>
+        </div>
+      </div>
+
+      <div class="row">
+        <button id="reset">Reset corners</button>
+        <button id="rotate" title="Rotate content 90°">Rotate 90°</button>
+      </div>
+    </fieldset>
+
+    <h4>Output</h4>
+    <div class="row">
+      <button class="primary" id="fs">Fullscreen (F)</button>
+      <button id="perform">Output mode (Tab)</button>
+    </div>
+    <div class="row">
+      <button id="blackout">Blackout (B)</button>
+    </div>
+    <p class="hint">Drag this browser window onto the projector display, press <kbd>F</kbd>, then drag the corner handles onto your physical surface.</p>
+
+    <h4>Project</h4>
+    <div class="row">
+      <button id="export">Export…</button>
+      <button id="import">Import…</button>
+      <button class="danger" id="clear">Clear all</button>
+    </div>
+    <p class="hint">Layout autosaves in this browser. Local files and screen captures must be re-chosen after a reload.</p>
+
+    <details>
+      <summary style="cursor:pointer;color:#aaa">Keyboard shortcuts</summary>
+      <div class="keys" style="margin-top:8px">
+        <kbd>Tab</kbd><span>Toggle edit / output mode</span>
+        <kbd>F</kbd><span>Fullscreen</span>
+        <kbd>H</kbd><span>Hide / show panel</span>
+        <kbd>B</kbd><span>Blackout</span>
+        <kbd>N</kbd><span>New surface</span>
+        <kbd>M</kbd><span>Toggle mesh warp</span>
+        <kbd>1–4</kbd><span>Select corner</span>
+        <kbd>←↑↓→</kbd><span>Nudge selected point 1px (Shift: 10px)</span>
+        <kbd>Ctrl+←↑↓→</kbd><span>Move whole surface</span>
+        <kbd>[ ]</kbd><span>Previous / next surface</span>
+        <kbd>Del</kbd><span>Delete surface</span>
+        <kbd>Shift+drag</kbd><span>Fine adjust</span>
+      </div>
+    </details>
+  </div>
+</div>
+<div id="toast"></div>
+<input type="file" id="filein" class="hide">
+<input type="file" id="importin" accept=".json,application/json" class="hide">
+
+<script>
+(() => {
+'use strict';
+const $ = s => document.querySelector(s);
+const stage = $('#stage'), svg = $('#overlay');
+const KEY = 'projmap.v1';
+const GEN = ['grid', 'plasma', 'stripes', 'rings'];
+const IFRAME = ['youtube', 'web'];                 // can't be read as pixels -> corner-pin only
+const PALETTE = ['#ff2d6f', '#2dd4ff', '#ffd02d', '#7cff2d', '#b06bff', '#ff8a2d'];
+const TESS = 48;                                   // mesh tessellation per axis (GL)
+
+let S = { surfaces: [], sel: null, corner: 0, mpt: null };
+const media = {};        // surface id -> { url, name } | { stream, name }
+const els = {};          // surface id -> render state
+const camStreams = {};   // deviceId ('' = default) -> MediaStream
+let cams = [];
+let drag = null;
+
+// ================= math =================
+const adj = m => [
+  m[4]*m[8]-m[5]*m[7], m[2]*m[7]-m[1]*m[8], m[1]*m[5]-m[2]*m[4],
+  m[5]*m[6]-m[3]*m[8], m[0]*m[8]-m[2]*m[6], m[2]*m[3]-m[0]*m[5],
+  m[3]*m[7]-m[4]*m[6], m[1]*m[6]-m[0]*m[7], m[0]*m[4]-m[1]*m[3]];
+const mul = (a, b) => { const c = []; for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+  let s = 0; for (let k = 0; k < 3; k++) s += a[3*i+k] * b[3*k+j]; c[3*i+j] = s; } return c; };
+const mulv = (m, v) => [m[0]*v[0]+m[1]*v[1]+m[2]*v[2], m[3]*v[0]+m[4]*v[1]+m[5]*v[2], m[6]*v[0]+m[7]*v[1]+m[8]*v[2]];
+function basis(p) {
+  const m = [p[0][0], p[1][0], p[2][0], p[0][1], p[1][1], p[2][1], 1, 1, 1];
+  const v = mulv(adj(m), [p[3][0], p[3][1], 1]);
+  return mul(m, [v[0], 0, 0, 0, v[1], 0, 0, 0, v[2]]);
+}
+const project = (src, dst) => mul(basis(dst), adj(basis(src)));
+const applyH = (H, [x, y]) => { const w = H[6]*x + H[7]*y + H[8]; return [(H[0]*x + H[1]*y + H[2]) / w, (H[3]*x + H[4]*y + H[5]) / w]; };
+const UNIT = [[0, 0], [1, 0], [1, 1], [0, 1]];
+const px = s => s.pts.map(p => [p[0] * innerWidth, p[1] * innerHeight]);
+const homog = s => project(UNIT, px(s));            // unit square -> screen px
+const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+function quadAspect(s) {
+  const P = px(s);
+  const w = (dist(P[0], P[1]) + dist(P[3], P[2])) / 2, h = (dist(P[0], P[3]) + dist(P[1], P[2])) / 2;
+  return Math.min(8, Math.max(1/8, Math.max(w, 1) / Math.max(h, 1)));
+}
+
+// ---- Catmull-Rom mesh surface (control points live in the corners' unit space) ----
+const ext = (a, b) => [2*a[0] - b[0], 2*a[1] - b[1]];
+const cr = (p0, p1, p2, p3, t) => { const t2 = t*t, t3 = t2*t; return [0, 1].map(k =>
+  0.5 * (2*p1[k] + (p2[k] - p0[k])*t + (2*p0[k] - 5*p1[k] + 4*p2[k] - p3[k])*t2 + (3*p1[k] - p0[k] - 3*p2[k] + p3[k])*t3)); };
+function crEval(M, u, v) {
+  const { cols, rows, pts } = M;
+  const P = (i, j) => {
+    if (i < 0) return ext(P(0, j), P(1, j));
+    if (i >= cols) return ext(P(cols-1, j), P(cols-2, j));
+    if (j < 0) return ext(P(i, 0), P(i, 1));
+    if (j >= rows) return ext(P(i, rows-1), P(i, rows-2));
+    return pts[j*cols + i];
+  };
+  const gx = u * (cols - 1), gy = v * (rows - 1);
+  const i = Math.min(Math.floor(gx), cols - 2), j = Math.min(Math.floor(gy), rows - 2);
+  const tx = gx - i, ty = gy - j, R = [];
+  for (let r = -1; r <= 2; r++) R.push(cr(P(i-1, j+r), P(i, j+r), P(i+1, j+r), P(i+2, j+r), tx));
+  return cr(R[0], R[1], R[2], R[3], ty);
+}
+const uniformGrid = (c, r) => { const a = []; for (let j = 0; j < r; j++) for (let i = 0; i < c; i++) a.push([i/(c-1), j/(r-1)]); return a; };
+const defaultMesh = () => ({ on: false, cols: 4, rows: 4, pts: uniformGrid(4, 4) });
+const meshActive = s => !!(s.mesh && s.mesh.on && !IFRAME.includes(s.content));
+const meshEval = (s, u, v) => meshActive(s) ? crEval(s.mesh, u, v) : [u, v];
+const isMeshCorner = (M, k) => k === 0 || k === M.cols - 1 || k === (M.rows - 1) * M.cols || k === M.rows * M.cols - 1;
+function resampleMesh(M, c, r) {
+  const pts = [];
+  for (let j = 0; j < r; j++) for (let i = 0; i < c; i++) pts.push(crEval(M, i/(c-1), j/(r-1)));
+  pts[0] = [0, 0]; pts[c-1] = [1, 0]; pts[(r-1)*c] = [0, 1]; pts[r*c-1] = [1, 1];
+  return { ...M, cols: c, rows: r, pts };
+}
+
+// ================= state =================
+const uid = () => Math.random().toString(36).slice(2, 9);
+const cur = () => S.surfaces.find(s => s.id === S.sel) || null;
+const byId = id => S.surfaces.find(s => s.id === id);
+
+function newSurface() {
+  const n = S.surfaces.length, o = (n % 5) * 0.04;
+  return { id: uid(), name: 'Surface ' + (n + 1),
+    pts: [[.3+o, .3+o], [.7+o, .3+o], [.7+o, .7+o], [.3+o, .7+o]],
+    content: 'grid', color: PALETTE[n % PALETTE.length], text: 'Hello', fit: 'fill', url: '', deviceId: '',
+    opacity: 1, brightness: 1, visible: true, flipH: false, flipV: false, sound: false, mesh: defaultMesh() };
+}
+function migrate(s) {
+  if (!s.mesh) s.mesh = defaultMesh();
+  if (s.url == null) s.url = '';
+  if (s.deviceId == null) s.deviceId = '';
+  return s;
+}
+
+let saveT;
+function save() {
+  clearTimeout(saveT);
+  saveT = setTimeout(() => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} }, 250);
+}
+function load() {
+  try { const d = JSON.parse(localStorage.getItem(KEY)); if (d && Array.isArray(d.surfaces)) S = { ...S, ...d }; } catch {}
+  S.surfaces.forEach(migrate); S.mpt = null;
+}
+
+// ================= URL helpers =================
+function ytParse(raw) {
+  raw = (raw || '').trim(); if (!raw) return null;
+  if (/^[\w-]{11}$/.test(raw)) return { id: raw };
+  let u; try { u = new URL(raw.includes('://') ? raw : 'https://' + raw); } catch { return null; }
+  const h = u.hostname.replace(/^(www|m|music)\./, '');
+  let id = null;
+  if (h === 'youtu.be') id = u.pathname.slice(1).split('/')[0];
+  else if (h.endsWith('youtube.com') || h.endsWith('youtube-nocookie.com')) {
+    id = u.searchParams.get('v');
+    const m = u.pathname.match(/^\/(shorts|embed|live|v)\/([\w-]{11})/); if (m) id = m[2];
+  } else return null;
+  const list = u.searchParams.get('list');
+  const t = u.searchParams.get('t') || u.searchParams.get('start');
+  let start = 0;
+  if (t) { const m = t.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s?)?$/); if (m) start = (+m[1]||0)*3600 + (+m[2]||0)*60 + (+m[3]||0); }
+  if (!id && !list) return null;
+  return { id, list, start };
+}
+function ytSrc(p) {
+  const q = new URLSearchParams({ autoplay: 1, mute: 1, loop: 1, controls: 0, rel: 0, playsinline: 1,
+    enablejsapi: 1, iv_load_policy: 3, disablekb: 1 });
+  if (location.protocol.startsWith('http')) q.set('origin', location.origin);
+  if (p.start) q.set('start', p.start);
+  if (p.list) { q.set('list', p.list); if (!p.id) return 'https://www.youtube.com/embed/videoseries?' + q; }
+  else q.set('playlist', p.id);   // needed for loop=1 on single videos
+  return `https://www.youtube.com/embed/${p.id}?` + q;
+}
+const ytCmd = (el, func, args = []) => { try { el.contentWindow.postMessage(JSON.stringify({ event: 'command', func, args }), '*'); } catch {} };
+function ytSound(el, on) {
+  if (on) { ytCmd(el, 'unMute'); ytCmd(el, 'setVolume', [100]); } else ytCmd(el, 'mute');
+  ytCmd(el, 'playVideo');
+}
+function webSrc(raw) {
+  raw = (raw || '').trim(); if (!raw) return null;
+  const url = raw.includes('://') ? raw : 'https://' + raw;
+  const vm = url.match(/^https?:\/\/(?:www\.)?vimeo\.com\/(\d+)/);
+  if (vm) return `https://player.vimeo.com/video/${vm[1]}?autoplay=1&muted=1&loop=1&background=1`;
+  return url;
+}
+
+// ================= sources =================
+const canvasSrc = (gen, w = 512, h = 512) => { const el = document.createElement('canvas'); el.width = w; el.height = h;
+  return { el, kind: 'canvas', gen, ctx: el.getContext('2d') }; };
+const placeholder = () => canvasSrc('missing');
+function videoEl() { const v = document.createElement('video'); v.loop = true; v.muted = true; v.autoplay = true; v.playsInline = true; return v; }
+
+function makeSource(s, mode) {
+  const m = media[s.id], gl = mode === 'gl';
+  switch (s.content) {
+    case 'grid': case 'plasma': case 'stripes': case 'rings': return canvasSrc(s.content);
+    case 'color': case 'text': {
+      if (gl) return { ...canvasSrc(null, 1024, 1024), static: true };
+      const el = document.createElement('div'); if (s.content === 'text') el.className = 'txt';
+      return { el, kind: 'div' };
+    }
+    case 'image': case 'imageurl': {
+      const url = s.content === 'image' ? m?.url : s.url.trim();
+      if (!url) return placeholder();
+      const el = new Image(); el.draggable = false;
+      if (gl && s.content === 'imageurl') el.crossOrigin = 'anonymous';
+      el.onerror = () => toast('Could not load image' + (gl ? ' — for mesh warp the server must allow CORS' : ''));
+      el.src = url; return { el, kind: 'img' };
+    }
+    case 'video': case 'videourl': {
+      const url = s.content === 'video' ? m?.url : s.url.trim();
+      if (!url) return placeholder();
+      const el = videoEl();
+      if (gl && s.content === 'videourl') el.crossOrigin = 'anonymous';
+      el.onerror = () => toast('Could not load video' + (gl && s.content === 'videourl' ? ' — for mesh warp the server must allow CORS' : ''));
+      el.src = url; el.play().catch(() => {}); return { el, kind: 'video' };
+    }
+    case 'webcam': case 'screen': {
+      const st = s.content === 'webcam' ? camStreams[s.deviceId || ''] : m?.stream;
+      if (!st) return placeholder();
+      const el = videoEl(); el.srcObject = st; el.play().catch(() => {}); return { el, kind: 'video' };
+    }
+    case 'youtube': {
+      const p = ytParse(s.url); if (!p) return placeholder();
+      const el = document.createElement('iframe');
+      el.allow = 'autoplay; encrypted-media; picture-in-picture';
+      el.referrerPolicy = 'strict-origin-when-cross-origin';
+      el.src = ytSrc(p);
+      el.onload = () => [400, 1500, 3500].forEach(t => setTimeout(() => ytSound(el, s.sound), t));
+      return { el, kind: 'iframe' };
+    }
+    case 'web': {
+      const url = webSrc(s.url); if (!url) return placeholder();
+      const el = document.createElement('iframe'); el.allow = 'autoplay; fullscreen; encrypted-media'; el.src = url;
+      return { el, kind: 'iframe' };
+    }
+  }
+  return placeholder();
+}
+
+function contentKey(s) {
+  switch (s.content) {
+    case 'image': case 'video': return s.content + '|' + (media[s.id]?.url || '');
+    case 'screen': return 'screen|' + (media[s.id]?.stream?.id || '');
+    case 'webcam': return 'webcam|' + s.deviceId + '|' + (camStreams[s.deviceId || '']?.id || '');
+    case 'youtube': case 'web': case 'videourl': case 'imageurl': return s.content + '|' + s.url.trim();
+  }
+  return s.content;
+}
+
+// ================= WebGL mesh renderer =================
+const VS = `attribute vec2 p; attribute vec2 t; varying vec2 v; void main(){ v = t; gl_Position = vec4(p, 0.0, 1.0); }`;
+const FS = `precision mediump float; varying vec2 v; uniform sampler2D tex; uniform vec2 sc; uniform vec2 fl;
+  void main(){ vec2 uv = mix(v, 1.0 - v, fl); uv = (uv - 0.5) * sc + 0.5;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
+    gl_FragColor = vec4(texture2D(tex, uv).rgb, 1.0); }`;
+let IDX = null, UVS = null;
+function tessArrays() {
+  if (IDX) return;
+  const n = TESS + 1; UVS = new Float32Array(n * n * 2); IDX = new Uint16Array(TESS * TESS * 6);
+  for (let j = 0, k = 0; j < n; j++) for (let i = 0; i < n; i++) { UVS[k++] = i / TESS; UVS[k++] = j / TESS; }
+  for (let j = 0, k = 0; j < TESS; j++) for (let i = 0; i < TESS; i++) {
+    const a = j*n + i, b = a + 1, c = a + n, d = c + 1; IDX.set([a, b, c, b, d, c], k); k += 6;
+  }
+}
+function initGL() {
+  const canvas = document.createElement('canvas'); canvas.className = 'glsurf';
+  const gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true, antialias: true });
+  if (!gl) return null;
+  tessArrays();
+  const sh = (type, src) => { const o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o); return o; };
+  const pr = gl.createProgram();
+  gl.attachShader(pr, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, FS));
+  gl.linkProgram(pr); gl.useProgram(pr);
+  const tb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, tb); gl.bufferData(gl.ARRAY_BUFFER, UVS, gl.STATIC_DRAW);
+  const lt = gl.getAttribLocation(pr, 't'); gl.enableVertexAttribArray(lt); gl.vertexAttribPointer(lt, 2, gl.FLOAT, false, 0, 0);
+  const pb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, pb); gl.bufferData(gl.ARRAY_BUFFER, UVS.length * 4, gl.DYNAMIC_DRAW);
+  const lp = gl.getAttribLocation(pr, 'p'); gl.enableVertexAttribArray(lp); gl.vertexAttribPointer(lp, 2, gl.FLOAT, false, 0, 0);
+  const ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, IDX, gl.STATIC_DRAW);
+  const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
+  return { canvas, gl, pb, uSc: gl.getUniformLocation(pr, 'sc'), uFl: gl.getUniformLocation(pr, 'fl') };
+}
+function buildMesh(s, g) {
+  const H = homog(s), W = innerWidth, Hh = innerHeight, n = TESS + 1, a = new Float32Array(n * n * 2);
+  for (let j = 0, k = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    const p = applyH(H, meshEval(s, i / TESS, j / TESS));
+    a[k++] = p[0] / W * 2 - 1; a[k++] = 1 - p[1] / Hh * 2;
+  }
+  g.gl.bindBuffer(g.gl.ARRAY_BUFFER, g.pb); g.gl.bufferData(g.gl.ARRAY_BUFFER, a, g.gl.DYNAMIC_DRAW);
+}
+function fitScale(fit, sa, ta) {
+  if (fit === 'cover') return sa > ta ? [ta / sa, 1] : [1, sa / ta];
+  if (fit === 'contain') return sa > ta ? [1, sa / ta] : [ta / sa, 1];
+  return [1, 1];
+}
+function renderGL(s, e) {
+  const g = e.g, gl = g.gl, c = g.canvas, src = e.src, el = src.el;
+  const dpr = Math.min(devicePixelRatio || 1, 2), W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
+  if (c.width !== W || c.height !== H) { c.width = W; c.height = H; e.geomDirty = true; }
+  if (e.geomDirty) { buildMesh(s, g); e.geomDirty = false; }
+  if (src.static && Math.abs((e.textAspect || 0) - quadAspect(s)) > 0.03) drawStatic(s, e);
+  // texture upload
+  let up = false;
+  if (src.kind === 'video') { if (el.readyState >= 2 && el.videoWidth) { up = true; e.sw = el.videoWidth; e.sh = el.videoHeight; } }
+  else if (src.kind === 'img') { if (el.complete && el.naturalWidth && !e.texUp) { up = true; e.sw = el.naturalWidth; e.sh = el.naturalHeight; } }
+  else if (src.kind === 'canvas') { if (src.gen || e.texDirty) { up = true; e.sw = el.width; e.sh = el.height; e.texDirty = false; } }
+  if (up && !e.taint) {
+    try { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, el); e.texUp = true; }
+    catch (err) { e.taint = true; toast('This media blocks pixel access (no CORS), so it cannot be mesh-warped. Turn off mesh or use screen capture.'); }
+  }
+  const media = src.kind === 'video' || src.kind === 'img';
+  const sc = media && e.sw ? fitScale(s.fit, e.sw / e.sh, quadAspect(s)) : [1, 1];
+  gl.viewport(0, 0, W, H); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.uniform2f(g.uSc, sc[0], sc[1]); gl.uniform2f(g.uFl, s.flipH ? 1 : 0, s.flipV ? 1 : 0);
+  gl.drawElements(gl.TRIANGLES, IDX.length, gl.UNSIGNED_SHORT, 0);
+}
+
+// static canvas content (solid color / text) for GL surfaces
+function drawStatic(s, e) {
+  const ta = quadAspect(s), c = e.src.ctx, cv = e.src.el;
+  cv.width = 1024; cv.height = Math.max(64, Math.min(4096, Math.round(1024 / ta)));
+  const W = cv.width, H = cv.height;
+  if (s.content === 'color') { c.fillStyle = s.color; c.fillRect(0, 0, W, H); }
+  else {
+    c.fillStyle = '#000'; c.fillRect(0, 0, W, H); c.fillStyle = s.color;
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    let size = Math.min(W * 0.15, H * 0.8), lines;
+    for (;;) {
+      c.font = `700 ${size}px system-ui, sans-serif`;
+      lines = []; let ln = '';
+      for (const w of String(s.text).split(/\s+/)) {
+        const t = ln ? ln + ' ' + w : w;
+        if (c.measureText(t).width > W * 0.9 && ln) { lines.push(ln); ln = w; } else ln = t;
+      }
+      lines.push(ln);
+      const wide = Math.max(...lines.map(l => c.measureText(l).width));
+      if ((lines.length * size * 1.1 <= H * 0.9 && wide <= W * 0.92) || size < 8) break;
+      size *= 0.9;
+    }
+    lines.forEach((l, i) => c.fillText(l, W / 2, H / 2 + (i - (lines.length - 1) / 2) * size * 1.1));
+  }
+  e.textAspect = ta; e.texDirty = true;
+}
+
+// ================= surface lifecycle =================
+function teardown(e) {
+  if (e.src) {
+    const el = e.src.el;
+    if (el.tagName === 'VIDEO') { el.pause(); el.srcObject = null; el.removeAttribute('src'); el.load(); }
+    if (el.tagName === 'IFRAME') el.src = 'about:blank';
+  }
+  if (e.g) { e.g.gl.getExtension('WEBGL_lose_context')?.loseContext(); e.g = null; }
+  e.node?.remove(); e.node = null;
+}
+function build(s, e, mode) {
+  teardown(e);
+  e.src = makeSource(s, mode); e.mode = mode;
+  e.texUp = false; e.taint = false; e.geomDirty = true; e.ytSound = undefined; e.sw = 0; e.sh = 0; e.textAspect = 0;
+  if (mode === 'gl') {
+    e.g = initGL();
+    if (!e.g) return false;
+    e.node = e.g.canvas;
+  } else {
+    const w = document.createElement('div'); w.className = 'surface'; w.appendChild(e.src.el); e.node = w;
+  }
+  return true;
+}
+function boxSize(s) {   // size of the untransformed DOM content box (its aspect drives text layout & cover/contain)
+  const ta = quadAspect(s);
+  if (s.content === 'youtube') return s.fit === 'contain' ? [1600, 1600 / ta] : [1600, 900];
+  if (s.content === 'web') return [1280, 1280 / ta];
+  return [1000, 1000 / ta];
+}
+function updateGeom(s) {
+  const e = els[s.id]; if (!e || !e.node) return;
+  if (e.mode === 'gl') { e.geomDirty = true; return; }
+  const [bw, bh] = boxSize(s);
+  e.node.style.width = bw + 'px'; e.node.style.height = bh + 'px';
+  const t = project([[0, 0], [bw, 0], [bw, bh], [0, bh]], px(s));
+  for (let i = 0; i < 9; i++) t[i] /= t[8];
+  if (!t.every(Number.isFinite)) return;
+  e.node.style.transform = `matrix3d(${t[0]},${t[3]},0,${t[6]},${t[1]},${t[4]},0,${t[7]},0,0,1,0,${t[2]},${t[5]},0,${t[8]})`;
+}
+function applyStyle(s, e) {
+  const n = e.node, el = e.src.el;
+  n.style.display = s.visible ? '' : 'none';
+  n.style.opacity = s.opacity;
+  n.style.filter = s.brightness !== 1 ? `brightness(${s.brightness})` : '';
+  if (el.tagName === 'VIDEO' && (s.content === 'video' || s.content === 'videourl')) el.muted = !s.sound;
+  if (e.mode === 'dom') {
+    el.style.transform = (s.flipH || s.flipV) ? `scale(${s.flipH ? -1 : 1},${s.flipV ? -1 : 1})` : '';
+    if (el.tagName === 'IMG' || el.tagName === 'VIDEO') el.style.objectFit = s.fit;
+    if (s.content === 'color') el.style.background = s.color;
+    if (s.content === 'text') { el.textContent = s.text; el.style.color = s.color; }
+    if (s.content === 'youtube' && el.tagName === 'IFRAME' && e.ytSound !== s.sound) { e.ytSound = s.sound; ytSound(el, s.sound); }
+  } else if (e.src.static) drawStatic(s, e);
+  updateGeom(s);
+}
+
+function sync() {
+  for (const id in els) if (!byId(id)) { teardown(els[id]); delete els[id]; }
+  S.surfaces.forEach((s, i) => {
+    const e = els[s.id] || (els[s.id] = {});
+    let mode = meshActive(s) ? 'gl' : 'dom';
+    const key = contentKey(s) + '|' + mode;
+    if (e.key !== key) {
+      if (!build(s, e, mode)) { toast('WebGL unavailable (too many mesh surfaces?) — mesh turned off'); s.mesh.on = false; mode = 'dom'; build(s, e, mode); }
+      e.key = contentKey(s) + '|' + mode;
+    }
+    if (stage.children[i] !== e.node) stage.insertBefore(e.node, stage.children[i] || null);
+    applyStyle(s, e);
+  });
+  if (S.sel && !cur()) S.sel = null;
+  drawOverlay(); renderPanel(); save();
+}
+
+// ================= overlay =================
+function outline(s, H) {
+  if (!meshActive(s)) return px(s);
+  const o = [], n = 16, add = (u, v) => o.push(applyH(H, crEval(s.mesh, u, v)));
+  for (let k = 0; k < n; k++) add(k/n, 0);
+  for (let k = 0; k < n; k++) add(1, k/n);
+  for (let k = 0; k < n; k++) add(1 - k/n, 1);
+  for (let k = 0; k < n; k++) add(0, 1 - k/n);
+  return o;
+}
+const ptsAttr = P => P.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+function drawOverlay() {
+  svg.setAttribute('viewBox', `0 0 ${innerWidth} ${innerHeight}`);
+  let h = '';
+  for (const s of S.surfaces) {
+    if (!s.visible) continue;
+    h += `<polygon class="body${s.id === S.sel ? ' sel' : ''}" data-id="${s.id}" style="--c:${s.color}" points="${ptsAttr(outline(s, homog(s)))}"/>`;
+  }
+  const s = cur();
+  if (s && s.visible) {
+    const H = homog(s), P = px(s), mesh = meshActive(s);
+    const C = applyH(H, meshEval(s, .5, .5));
+    h += `<g style="--c:${s.color}">`;
+    if (mesh) {
+      const M = s.mesh, N = 32;
+      for (let j = 0; j < M.rows; j++) { const L = []; for (let k = 0; k <= N; k++) L.push(applyH(H, crEval(M, k/N, j/(M.rows-1)))); h += `<polyline class="mline" points="${ptsAttr(L)}"/>`; }
+      for (let i = 0; i < M.cols; i++) { const L = []; for (let k = 0; k <= N; k++) L.push(applyH(H, crEval(M, i/(M.cols-1), k/N))); h += `<polyline class="mline" points="${ptsAttr(L)}"/>`; }
+      M.pts.forEach((p, k) => {
+        if (isMeshCorner(M, k)) return;
+        const q = applyH(H, p);
+        h += `<circle class="mpt${S.mpt === k ? ' on' : ''}" data-m="${k}" cx="${q[0]}" cy="${q[1]}" r="6"/>`;
+      });
+    } else {
+      h += `<line class="diag" x1="${P[0][0]}" y1="${P[0][1]}" x2="${P[2][0]}" y2="${P[2][1]}"/>`;
+      h += `<line class="diag" x1="${P[1][0]}" y1="${P[1][1]}" x2="${P[3][0]}" y2="${P[3][1]}"/>`;
+    }
+    h += `<rect class="move" x="${C[0]-8}" y="${C[1]-8}" width="16" height="16" rx="3"/>`;
+    P.forEach((p, i) => {
+      const dx = p[0] - C[0], dy = p[1] - C[1], L = Math.hypot(dx, dy) || 1;
+      h += `<circle class="corner${i === S.corner && S.mpt == null ? ' on' : ''}" data-corner="${i}" cx="${p[0]}" cy="${p[1]}" r="11"/>`;
+      h += `<text x="${p[0] + dx/L*24}" y="${p[1] + dy/L*24 + 5}" text-anchor="middle">${i + 1}</text>`;
+    });
+    h += `<text x="${C[0]}" y="${C[1] - 16}" text-anchor="middle">${esc(s.name)}</text></g>`;
+  }
+  svg.innerHTML = h;
+}
+const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// ================= generative patterns =================
+const off = document.createElement('canvas'); off.width = off.height = 96;
+const offCtx = off.getContext('2d'); const offImg = offCtx.createImageData(96, 96);
+function hexRgb(h) { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+const MISSING = {
+  image: ['No image loaded', 'Click "Choose file…" in the panel'], video: ['No video loaded', 'Click "Choose file…" in the panel'],
+  youtube: ['No YouTube link', 'Paste a link in the panel'], videourl: ['No video URL', 'Paste a link in the panel'],
+  imageurl: ['No image URL', 'Paste a link in the panel'], web: ['No web page URL', 'Paste a link in the panel'],
+  webcam: ['Camera not started', 'Click "Start camera" in the panel'], screen: ['No capture running', 'Click "Start capture…" in the panel'],
+};
+
+function drawGen(e, s, t) {
+  const c = e.src.ctx, N = 512;
+  c.save();
+  c.fillStyle = '#000'; c.fillRect(0, 0, N, N);
+  const line = (x1, y1, x2, y2) => { c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.stroke(); };
+  switch (e.src.gen) {
+    case 'grid': {
+      c.strokeStyle = 'rgba(255,255,255,.35)'; c.lineWidth = 1;
+      for (let i = 1; i < 16; i++) { const x = i * N / 16; line(x, 0, x, N); line(0, x, N, x); }
+      c.strokeStyle = 'rgba(255,255,255,.2)'; line(0, 0, N, N); line(N, 0, 0, N);
+      c.strokeStyle = s.color; c.lineWidth = 3;
+      line(N/2, 0, N/2, N); line(0, N/2, N, N/2);
+      c.beginPath(); c.arc(N/2, N/2, N*.38, 0, 7); c.stroke();
+      c.beginPath(); c.arc(N/2, N/2, N*.16, 0, 7); c.stroke();
+      c.lineWidth = 8; c.strokeRect(4, 4, N-8, N-8);
+      c.fillStyle = '#fff'; c.font = 'bold 30px system-ui'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      [[34, 34], [N-34, 34], [N-34, N-34], [34, N-34]].forEach(([x, y], i) => c.fillText(i + 1, x, y));
+      c.font = 'bold 24px system-ui';
+      const w = c.measureText(s.name).width + 20;
+      c.fillStyle = '#000'; c.fillRect(N/2 - w/2, N/2 + 40, w, 34);
+      c.fillStyle = '#fff'; c.fillText(s.name, N/2, N/2 + 58);
+      break;
+    }
+    case 'plasma': {
+      const d = offImg.data, [br, bg, bb] = hexRgb(s.color);
+      for (let y = 0, k = 0; y < 96; y++) for (let x = 0; x < 96; x++, k += 4) {
+        const v = Math.sin(x*.09 + t) + Math.sin(y*.07 - t*1.3) + Math.sin((x+y)*.05 + t*.7)
+                + Math.sin(Math.hypot(x-48, y-48)*.13 - t*2);
+        const a = v * Math.PI / 2;
+        d[k]   = (128 + 127*Math.sin(a)) * .6 + br * .4;
+        d[k+1] = (128 + 127*Math.sin(a + 2.09)) * .6 + bg * .4;
+        d[k+2] = (128 + 127*Math.sin(a + 4.19)) * .6 + bb * .4;
+        d[k+3] = 255;
+      }
+      offCtx.putImageData(offImg, 0, 0);
+      c.imageSmoothingEnabled = true; c.drawImage(off, 0, 0, N, N);
+      break;
+    }
+    case 'stripes': {
+      c.translate(N/2, N/2); c.rotate(Math.PI / 4); c.fillStyle = s.color;
+      const p = 80, sh = (t * 90) % p;
+      for (let x = -N; x < N; x += p) c.fillRect(x + sh, -N, p/2, 2*N);
+      break;
+    }
+    case 'rings': {
+      c.strokeStyle = s.color; c.lineWidth = 22; const max = N * .72;
+      for (let i = 0; i < 6; i++) {
+        const r = (i * max / 6 + t * 70) % max;
+        c.globalAlpha = 1 - r / max; c.beginPath(); c.arc(N/2, N/2, r, 0, 7); c.stroke();
+      }
+      break;
+    }
+    case 'missing': {
+      c.strokeStyle = 'rgba(255,255,255,.15)';
+      for (let i = 1; i < 8; i++) { const x = i * N / 8; line(x, 0, x, N); line(0, x, N, x); }
+      c.strokeStyle = s.color; c.lineWidth = 6; c.strokeRect(3, 3, N-6, N-6);
+      c.fillStyle = '#fff'; c.font = 'bold 26px system-ui'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      const msg = MISSING[s.content] || ['No content', ''];
+      c.fillText(msg[0], N/2, N/2 - 18); c.font = '20px system-ui'; c.fillStyle = '#aaa'; c.fillText(msg[1], N/2, N/2 + 18);
+      break;
+    }
+  }
+  c.restore();
+}
+
+function loop() {
+  const t = performance.now() / 1000;
+  for (const s of S.surfaces) {
+    const e = els[s.id]; if (!e || !e.src || !s.visible) continue;
+    if (e.src.gen) drawGen(e, s, t);
+    if (e.mode === 'gl' && e.g) renderGL(s, e);
+  }
+  requestAnimationFrame(loop);
+}
+
+// ================= live sources =================
+async function getCam(deviceId) {
+  const k = deviceId || '';
+  if (camStreams[k]) return camStreams[k];
+  const size = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+  const st = await navigator.mediaDevices.getUserMedia({ video: deviceId ? { deviceId: { exact: deviceId }, ...size } : size, audio: false });
+  camStreams[k] = st;
+  refreshDevices();
+  return st;
+}
+async function refreshDevices() {
+  try { cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput'); renderPanel(); } catch {}
+}
+async function startCam() {
+  const s = cur(); if (!s) return;
+  try { await getCam(s.deviceId); sync(); } catch (err) { toast('Could not start camera: ' + err.message); }
+}
+async function startCapture() {
+  const s = cur(); if (!s) return;
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 60 } }, audio: false });
+    const tr = stream.getVideoTracks()[0];
+    media[s.id] = { stream, name: tr.label || 'Screen capture' };
+    tr.addEventListener('ended', () => { for (const id in media) if (media[id].stream === stream) delete media[id]; sync(); });
+    sync();
+  } catch (err) { if (err.name !== 'NotAllowedError') toast('Capture failed: ' + err.message); }
+}
+
+// ================= panel =================
+const P = id => $('#p-' + id);
+const LABEL = { youtube: 'YT', web: 'WEB', videourl: 'URL', imageurl: 'URL', webcam: 'CAM', screen: 'CAP', video: 'VID', image: 'IMG' };
+const URL_PH = { youtube: 'https://youtube.com/watch?v=…', videourl: 'https://…/video.mp4', imageurl: 'https://…/image.jpg', web: 'https://vimeo.com/… or any embeddable page' };
+function renderPanel() {
+  $('#list').innerHTML = S.surfaces.slice().reverse().map(s =>
+    `<li data-id="${s.id}" class="${s.id === S.sel ? 'sel' : ''} ${s.visible ? '' : 'hid'}">
+       <span class="dot" style="background:${s.color}"></span><span class="nm">${esc(s.name)}</span>
+       ${meshActive(s) ? '<span class="tag">MESH</span>' : ''}${LABEL[s.content] ? `<span class="tag">${LABEL[s.content]}</span>` : ''}
+       <span class="eye" data-eye="1" title="Toggle visibility">${s.visible ? '👁' : '–'}</span></li>`).join('');
+  const s = cur();
+  $('#props').disabled = !s;
+  if (!s) return;
+  const set = (id, prop, v) => { const el = P(id); if (document.activeElement !== el) el[prop] = v; };
+  set('name', 'value', s.name); set('content', 'value', s.content); set('text', 'value', s.text);
+  set('color', 'value', s.color); set('fit', 'value', s.fit); set('url', 'value', s.url);
+  set('opacity', 'value', s.opacity); set('brightness', 'value', s.brightness);
+  ['visible', 'flipH', 'flipV', 'sound'].forEach(k => set(k, 'checked', s[k]));
+  set('mesh', 'checked', s.mesh.on); set('meshsize', 'value', s.mesh.cols + 'x' + s.mesh.rows);
+
+  const c = s.content, show = (id, on) => $('#' + id).classList.toggle('hide', !on);
+  show('g-file', c === 'image' || c === 'video');
+  show('g-url', !!URL_PH[c]); P('url').placeholder = URL_PH[c] || '';
+  show('g-device', c === 'webcam');
+  show('g-capture', c === 'screen');
+  show('g-text', c === 'text');
+  show('g-color', GEN.includes(c) || c === 'color' || c === 'text');
+  show('g-fit', ['image', 'video', 'imageurl', 'videourl', 'webcam', 'screen', 'youtube'].includes(c));
+  show('g-sound', ['video', 'videourl', 'youtube'].includes(c));
+  show('g-mesh', s.mesh.on);
+  $('#p-medianame').textContent = media[s.id]?.url ? '▶ ' + media[s.id].name : 'No file chosen';
+  $('#p-capname').textContent = media[s.id]?.stream ? '● ' + media[s.id].name : 'Not capturing';
+  $('#p-camstart').textContent = camStreams[s.deviceId || ''] ? 'Camera running' : 'Start camera';
+
+  const opts = '<option value="">Default camera</option>' + cams.map((d, i) =>
+    `<option value="${esc(d.deviceId)}">${esc(d.label || 'Camera ' + (i + 1))}</option>`).join('');
+  if (P('device').dataset.opts !== opts) { P('device').innerHTML = opts; P('device').dataset.opts = opts; }
+  set('device', 'value', s.deviceId);
+
+  const notes = [];
+  if (c === 'youtube' && location.protocol === 'file:')
+    notes.push('YouTube refuses to play when this page is opened as a file. Close it and launch with <b>start.bat</b> (serves it at http://localhost).');
+  if (IFRAME.includes(c) && s.mesh.on)
+    notes.push('Mesh warp can\'t bend YouTube / web pages (the browser won\'t expose their pixels), so corner-pin is used. To mesh-warp it, play it in another window and use <b>Screen / window / tab capture</b>.');
+  if (c === 'web') notes.push('Many sites block embedding. Player/embed links (Vimeo, YouTube embed, Shadertoy embed, Twitch player) work best. Use Fit = stretch.');
+  if ((c === 'videourl' || c === 'imageurl') && s.mesh.on) notes.push('Mesh warp needs the media server to allow CORS. If it stays black, turn mesh off or use screen capture.');
+  if (c === 'screen') notes.push('Tip: open YouTube (or any app) in another window, then capture that window/tab.');
+  $('#p-note').innerHTML = notes.join('<br><br>');
+}
+
+function bind(id, prop, ev = 'input', cast = v => v) {
+  P(id).addEventListener(ev, e => {
+    const s = cur(); if (!s) return;
+    s[prop] = cast(e.target.type === 'checkbox' ? e.target.checked : e.target.value);
+    sync();
+  });
+}
+bind('name', 'name'); bind('text', 'text'); bind('color', 'color'); bind('fit', 'fit', 'change');
+bind('opacity', 'opacity', 'input', Number); bind('brightness', 'brightness', 'input', Number);
+['visible', 'flipH', 'flipV', 'sound'].forEach(k => bind(k, k, 'change'));
+
+P('content').addEventListener('change', e => {
+  const s = cur(); if (!s) return;
+  s.content = e.target.value; sync();
+  if ((s.content === 'image' || s.content === 'video') && !media[s.id]?.url) pickFile();
+  if (s.content === 'webcam') startCam();
+  if (s.content === 'screen' && !media[s.id]?.stream) startCapture();
+  if (URL_PH[s.content] && !s.url) P('url').focus();
+});
+const applyUrl = () => { const s = cur(); if (!s) return; s.url = P('url').value.trim(); sync(); };
+P('url').addEventListener('change', applyUrl);
+P('url').addEventListener('keydown', e => { if (e.key === 'Enter') { applyUrl(); P('url').blur(); } });
+P('urlgo').onclick = applyUrl;
+P('device').addEventListener('change', e => { const s = cur(); if (!s) return; s.deviceId = e.target.value; startCam(); });
+P('camstart').onclick = startCam;
+P('capture').onclick = startCapture;
+
+function pickFile() {
+  const s = cur(); if (!s) return;
+  const fi = $('#filein'); fi.accept = s.content === 'video' ? 'video/*' : 'image/*'; fi.value = ''; fi.click();
+}
+P('pick').onclick = pickFile;
+$('#filein').addEventListener('change', e => {
+  const f = e.target.files[0], s = cur(); if (!f || !s) return;
+  media[s.id] = { url: URL.createObjectURL(f), name: f.name };
+  sync();
+});
+
+// mesh controls
+function toggleMesh(on) { const s = cur(); if (!s) return; s.mesh.on = on ?? !s.mesh.on; S.mpt = null; sync(); }
+P('mesh').addEventListener('change', e => toggleMesh(e.target.checked));
+P('meshsize').addEventListener('change', e => {
+  const s = cur(); if (!s) return;
+  const [c, r] = e.target.value.split('x').map(Number);
+  s.mesh = resampleMesh(s.mesh, c, r); S.mpt = null; sync();
+});
+$('#meshreset').onclick = () => { const s = cur(); if (!s) return; s.mesh.pts = uniformGrid(s.mesh.cols, s.mesh.rows); S.mpt = null; sync(); };
+
+$('#list').addEventListener('click', e => {
+  const li = e.target.closest('li'); if (!li) return;
+  const s = byId(li.dataset.id);
+  if (e.target.dataset.eye) s.visible = !s.visible; else { S.sel = s.id; S.mpt = null; }
+  sync();
+});
+
+function addSurface() { const s = newSurface(); S.surfaces.push(s); S.sel = s.id; S.corner = 0; S.mpt = null; sync(); }
+function delSurface() {
+  const i = S.surfaces.findIndex(s => s.id === S.sel); if (i < 0) return;
+  delete media[S.sel]; S.surfaces.splice(i, 1);
+  S.sel = S.surfaces[Math.min(i, S.surfaces.length - 1)]?.id || null; S.mpt = null; sync();
+}
+$('#add').onclick = addSurface;
+$('#del').onclick = delSurface;
+$('#dup').onclick = () => {
+  const s = cur(); if (!s) return;
+  const d = JSON.parse(JSON.stringify(s)); d.id = uid(); d.name = s.name + ' copy';
+  d.pts = d.pts.map(p => [p[0] + .03, p[1] + .03]);
+  if (media[s.id]) media[d.id] = media[s.id];
+  S.surfaces.push(d); S.sel = d.id; S.mpt = null; sync();
+};
+function reorder(dir) {
+  const i = S.surfaces.findIndex(s => s.id === S.sel), j = i + dir;
+  if (i < 0 || j < 0 || j >= S.surfaces.length) return;
+  [S.surfaces[i], S.surfaces[j]] = [S.surfaces[j], S.surfaces[i]]; sync();
+}
+$('#up').onclick = () => reorder(1);
+$('#down').onclick = () => reorder(-1);
+$('#reset').onclick = () => { const s = cur(); if (!s) return; s.pts = [[.3, .3], [.7, .3], [.7, .7], [.3, .7]]; sync(); };
+$('#rotate').onclick = () => {
+  const s = cur(); if (!s) return;
+  s.pts.push(s.pts.shift());               // rotate content 90° within the same screen quad
+  const M = s.mesh, nc = M.rows, nr = M.cols, np = [];   // keep the mesh's on-screen shape
+  for (let j = 0; j < nr; j++) for (let i = 0; i < nc; i++) { const o = M.pts[i * M.cols + (M.cols - 1 - j)]; np.push([o[1], 1 - o[0]]); }
+  s.mesh = { ...M, cols: nc, rows: nr, pts: np }; S.mpt = null;
+  sync();
+};
+
+// output controls
+function toggleFs() {
+  if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {});
+}
+function setEdit(on) {
+  document.body.classList.toggle('edit', on);
+  if (!on) toast('Output mode — press Tab to edit');
+}
+function toggleBlackout() { const on = document.body.classList.toggle('blackout'); toast(on ? 'Blackout ON (B)' : 'Blackout off'); }
+$('#fs').onclick = toggleFs;
+$('#perform').onclick = () => setEdit(false);
+$('#blackout').onclick = toggleBlackout;
+$('#hidepanel').onclick = () => { document.body.classList.add('nopanel'); toast('Panel hidden — press H to show'); };
+$('#side').onclick = () => $('#panel').classList.toggle('right');
+
+$('#export').onclick = () => {
+  const blob = new Blob([JSON.stringify({ surfaces: S.surfaces }, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'projection-map.json'; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+$('#import').onclick = () => { $('#importin').value = ''; $('#importin').click(); };
+$('#importin').addEventListener('change', async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    const d = JSON.parse(await f.text());
+    if (!Array.isArray(d.surfaces)) throw new Error('no surfaces');
+    S.surfaces = d.surfaces.map(migrate); S.sel = d.surfaces[0]?.id || null; S.mpt = null;
+    sync(); toast('Imported ' + d.surfaces.length + ' surfaces');
+  } catch (err) { toast('Import failed: ' + err.message); }
+});
+$('#clear').onclick = () => { if (confirm('Remove all surfaces?')) { S.surfaces = []; S.sel = null; sync(); } };
+
+let toastT;
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 3500);
+}
+
+// ================= editing (mouse + keyboard) =================
+function moveMeshPoint(s, k, dxPx, dyPx) {
+  const H = homog(s), q = applyH(H, s.mesh.pts[k]);
+  const r = applyH(adj(H), [q[0] + dxPx, q[1] + dyPx]);
+  if (r.every(Number.isFinite)) s.mesh.pts[k] = r;
+}
+function moved(s) { updateGeom(s); drawOverlay(); }
+
+svg.addEventListener('pointerdown', ev => {
+  const t = ev.target;
+  let mode = null, id = S.sel;
+  if (t.dataset.corner != null) { mode = 'corner'; S.corner = +t.dataset.corner; S.mpt = null; }
+  else if (t.dataset.m != null) { mode = 'mesh'; S.mpt = +t.dataset.m; }
+  else if (t.classList.contains('move')) mode = 'move';
+  else if (t.classList.contains('body')) { mode = 'move'; id = t.dataset.id; if (S.sel !== id) { S.sel = id; S.mpt = null; renderPanel(); } }
+  if (!mode) return;
+  ev.preventDefault();
+  drag = { mode, s: byId(id), x: ev.clientX, y: ev.clientY };
+  drawOverlay();
+});
+addEventListener('pointermove', ev => {
+  if (!drag) return;
+  const k = ev.shiftKey ? 0.2 : 1, s = drag.s;
+  const dxPx = (ev.clientX - drag.x) * k, dyPx = (ev.clientY - drag.y) * k;
+  drag.x = ev.clientX; drag.y = ev.clientY;
+  const dx = dxPx / innerWidth, dy = dyPx / innerHeight;
+  if (drag.mode === 'corner') { s.pts[S.corner][0] += dx; s.pts[S.corner][1] += dy; }
+  else if (drag.mode === 'mesh') moveMeshPoint(s, S.mpt, dxPx, dyPx);
+  else s.pts.forEach(p => { p[0] += dx; p[1] += dy; });
+  moved(s);
+});
+addEventListener('pointerup', () => { if (drag) { drag = null; save(); } });
+
+addEventListener('keydown', e => {
+  const ae = document.activeElement, tag = ae?.tagName;
+  if ((tag === 'INPUT' && ae.type !== 'checkbox') || tag === 'SELECT') { if (e.key === 'Escape') ae.blur(); return; }
+  const s = cur(), k = e.key;
+  if (k === 'Tab') { e.preventDefault(); setEdit(!document.body.classList.contains('edit')); return; }
+  if (k === 'f' || k === 'F') return toggleFs();
+  if (k === 'b' || k === 'B') return toggleBlackout();
+  if (!document.body.classList.contains('edit')) return;
+  if (k === 'h' || k === 'H') return document.body.classList.toggle('nopanel');
+  if (k === 'n' || k === 'N') return addSurface();
+  if (k === 'm' || k === 'M') return toggleMesh();
+  if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); return delSurface(); }
+  if (k === '[' || k === ']') {
+    if (!S.surfaces.length) return;
+    const i = S.surfaces.findIndex(x => x.id === S.sel), n = S.surfaces.length;
+    S.sel = S.surfaces[((i < 0 ? 0 : i) + (k === ']' ? 1 : -1) + n) % n].id; S.mpt = null; return sync();
+  }
+  if (!s) return;
+  if (k >= '1' && k <= '4') { S.corner = +k - 1; S.mpt = null; return drawOverlay(); }
+  const dirs = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+  if (dirs[k]) {
+    e.preventDefault();
+    const step = e.shiftKey ? 10 : 1, dxPx = dirs[k][0] * step, dyPx = dirs[k][1] * step;
+    const dx = dxPx / innerWidth, dy = dyPx / innerHeight;
+    if (e.ctrlKey || e.metaKey) s.pts.forEach(p => { p[0] += dx; p[1] += dy; });
+    else if (S.mpt != null && meshActive(s)) moveMeshPoint(s, S.mpt, dxPx, dyPx);
+    else { s.pts[S.corner][0] += dx; s.pts[S.corner][1] += dy; }
+    moved(s); save();
+  }
+});
+
+addEventListener('resize', () => { S.surfaces.forEach(updateGeom); drawOverlay(); });
+
+// ================= boot =================
+load();
+if (!S.surfaces.length) { const s = newSurface(); S.surfaces.push(s); S.sel = s.id; }
+sync();
+loop();
+// auto-restart cameras if permission was already granted
+(async () => {
+  if (!S.surfaces.some(s => s.content === 'webcam')) return;
+  try {
+    const p = await navigator.permissions.query({ name: 'camera' });
+    if (p.state !== 'granted') return;
+    for (const s of S.surfaces) if (s.content === 'webcam') await getCam(s.deviceId).catch(() => {});
+    sync();
+  } catch {}
+})();
+})();
+</script>
+</body>
+</html>
